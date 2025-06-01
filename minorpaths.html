@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>All OSM Paths Map</title>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    #map { height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map').setView([51.5074, -0.1278], 13); // Example: London
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    function getPaths() {
+      const bounds = map.getBounds();
+      const query = `
+        [out:json][timeout:25];
+        (
+          way["highway"~"footway|path|track|cycleway|bridleway|steps|corridor|pedestrian|living_street|service"]
+          (${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()});
+        );
+        out body;
+        >;
+        out skel qt;
+      `;
+
+      fetch("https://overpass-api.de/api/interpreter", {
+        method: "POST",
+        body: query
+      })
+      .then(res => res.json())
+      .then(data => {
+        const geojson = osmtogeojson(data);
+        L.geoJSON(geojson, {
+          style: { color: "#ff8800", weight: 2 }
+        }).addTo(map);
+      });
+    }
+
+    // You'll need osmtogeojson.js to convert Overpass output
+    const script = document.createElement('script');
+    script.src = 'https://rawcdn.githack.com/tyrasd/osmtogeojson/gh-pages/osmtogeojson.js';
+    script.onload = getPaths;
+    document.head.appendChild(script);
+  </script>
+</body>
+</html>
