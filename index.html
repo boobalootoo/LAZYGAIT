@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Dog Walk Planner</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Basic body styling for layout and font */
+    body {
+      margin: 0;
+      font-family: 'Inter', sans-serif; /* Using Inter font for a clean look */
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh; /* Full viewport height */
+      background-color: #f3f4f6; /* Light gray background */
+      align-items: center; /* Center content horizontally */
+      justify-content: flex-start; /* Align content to the top */
+    }
+    /* Map container styling */
+    #map {
+      height: 70vh; /* Adjust height to give more space for controls */
+      width: 100%;
+      max-width: 900px; /* Max width for better presentation on large screens */
+      border-radius: 0.5rem; /* Rounded corners for map */
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* Subtle shadow */
+      margin-bottom: 1rem; /* Space below the map */
+    }
+    /* Controls container styling */
+    #controls {
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      background-color: #ffffff;
+      border-radius: 0.5rem;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      margin: 1rem;
+      width: 100%;
+      max-width: 900px; /* Max width for better presentation on large screens */
+    }
+    /* Styling for route options (clickable text) */
+    .route-option {
+      cursor: pointer;
+      color: #3b82f6; /* Blue color for links */
+      text-decoration: underline;
+      font-weight: 600;
+    }
+    /* Styling for Leaflet Draw controls (rounded corners) */
+    .leaflet-control-container .leaflet-draw-toolbar,
+    .leaflet-control-container .leaflet-draw-actions {
+        border-radius: 0.5rem;
+    }
+    /* Custom styling for range input (slider) */
+    input[type="range"] {
+        width: 100%;
+        -webkit-appearance: none; /* Remove default styling */
+        height: 8px;
+        border-radius: 5px;
+        background: #d1d5db; /* Track color */
+        outline: none;
+        opacity: 0.7;
+        -webkit-transition: .2s;
+        transition: opacity .2s;
+    }
+    /* Custom styling for range input thumb (slider handle) */
+    input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: #2563eb; /* Thumb color */
+        cursor: pointer;
+    }
+    input[type="range"]::-moz-range-thumb {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: #2563eb;
+        cursor: pointer;
+    }
+    /* Tailwind classes for buttons for consistent styling */
+    button {
+        @apply bg-blue-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 transition duration-300 ease-in-out;
+    }
+    /* Styling for info messages */
+    .info-box {
+        @apply bg-blue-100 border border-blue-400 text-blue-700 px-4 py-3 rounded-lg relative mb-4;
+    }
+    /* Styling for error messages */
+    .error-box {
+        @apply bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg relative mb-4;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <h1 class="text-2xl font-bold text-gray-800 mb-4">Dog Walk Planner</h1>
+
+    <div id="messageBox" class="hidden"></div>
+
+    <p class="text-gray-700">
+      Click on the map to set your starting point. If you only set a start point, the planner will attempt to find a circular route back to your start. If you set a second point, it will plan a route between the two.
+      Use the <strong class="text-blue-600">circle draw tool</strong> on the map (top right) to mark areas you wish to avoid.
+    </p>
+
+    <label class="block text-gray-700 text-sm font-bold mb-2">
+      Minimum Distance (km):
+      <input type="range" id="minDistance" min="1" max="20" step="1" value="2" oninput="minDistanceLabel.innerText = minDistance.value + ' km'" class="mt-1">
+      <span id="minDistanceLabel" class="text-blue-600 font-semibold">2 km</span>
+    </label>
+    <label class="block text-gray-700 text-sm font-bold mb-2">
+      Maximum Distance (km):
+      <input type="range" id="maxDistance" min="1" max="20" step="1" value="5" oninput="maxDistanceLabel.innerText = maxDistance.value + ' km'" class="mt-1">
+      <span id="maxDistanceLabel" class="text-blue-600 font-semibold">5 km</span>
+    </label>
+    <button id="startRoute">Plan Route</button>
+    <button id="resetMap" class="bg-gray-500 hover:bg-gray-600">Reset Map</button>
+    <div id="results" class="mt-4"></div>
+  </div>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+  <script>
+    // Initialize the Leaflet map with a default view (London)
+    const map = L.map('map').setView([51.505, -0.09], 13);
+
+    // Add OpenStreetMap tile layer to the map
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+
+    // Feature group to store drawn items (circles for forbidden areas)
+    const drawnItems = new L.FeatureGroup();
+    map.addLayer(drawnItems);
+
+    // Initialize Leaflet Draw control for drawing circles
+    const drawControl = new L.Control.Draw({
+      draw: {
+        polyline: false,      // Disable polyline drawing
+        polygon: false,       // Disable polygon drawing
+        marker: false,        // Disable marker drawing (handled by map click)
+        rectangle: false,     // Disable rectangle drawing
+        circlemarker: false,  // Disable circle marker drawing
+        circle: {             // Enable circle drawing with custom styling
+            shapeOptions: {
+                color: '#ff0000', // Red border for forbidden areas
+                fillOpacity: 0.2  // Semi-transparent fill
+            }
+        }
+      },
+      edit: {
+        featureGroup: drawnItems // Allow editing of drawn items
+      }
+    });
+    map.addControl(drawControl); // Add the draw control to the map
+
+    // Event listener for when a new drawing (circle) is created
+    map.on(L.Draw.Event.CREATED, function (e) {
+      drawnItems.addLayer(e.layer); // Add the drawn layer to the feature group
+      showMessage('Area to avoid marked. You can draw multiple areas.', 'info');
+    });
+
+    // Variables to store map markers and route layers
+    let startMarker = null;
+    let endMarker = null;
+    let currentRoutePolyline = null; // Stores the currently displayed highlighted route
+    let allRoutePreviewLines = []; // Stores all preview route lines (faint gray)
+
+    /**
+     * Displays a message to the user in the message box.
+     * @param {string} message - The message content.
+     * @param {string} type - The type of message ('info' or 'error').
+     */
+    function showMessage(message, type = 'info') {
+        const messageBox = document.getElementById('messageBox');
+        // Remove existing classes and add new ones based on message type
+        messageBox.classList.remove('hidden', 'info-box', 'error-box');
+        messageBox.innerHTML = message;
+        if (type === 'error') {
+            messageBox.classList.add('error-box');
+        } else {
+            messageBox.classList.add('info-box');
+        }
+    }
+
+    /**
+     * Clears all messages from the message box.
+     */
+    function clearMessages() {
+        document.getElementById('messageBox').classList.add('hidden');
+    }
+
+    // Map click event to set start and end markers
+    map.on('click', function (e) {
+      if (!startMarker) {
+        // Set the start marker if not already set
+        startMarker = L.marker(e.latlng, { draggable: true }).addTo(map).bindPopup('Start Point').openPopup();
+        showMessage('Start point set. Click again to set an end point, or click "Plan Route" for a circular walk.', 'info');
+        // Update marker position if dragged
+        startMarker.on('dragend', function(event){
+            startMarker.setLatLng(event.target.getLatLng());
+            showMessage('Start point moved.', 'info');
+        });
+      } else if (!endMarker && startMarker.getLatLng().distanceTo(e.latlng) > 10) { // Prevent setting end marker on top of start (10m threshold)
+        // Set the end marker if not already set and not too close to start
+        endMarker = L.marker(e.latlng, { draggable: true }).addTo(map).bindPopup('End Point').openPopup();
+        showMessage('End point set. Click "Plan Route" to find walks between these points.', 'info');
+        // Update marker position if dragged
+        endMarker.on('dragend', function(event){
+            endMarker.setLatLng(event.target.getLatLng());
+            showMessage('End point moved.', 'info');
+        });
+      } else if (endMarker) {
+        // Inform user if both markers are already set
+        showMessage('Both start and end points are set. To reset, click "Reset Map".', 'info');
+      }
+    });
+
+    /**
+     * Clears all route lines (preview and highlighted) from the map.
+     */
+    function clearRouteLines() {
+      if (currentRoutePolyline) {
+        map.removeLayer(currentRoutePolyline);
+        currentRoutePolyline = null;
+      }
+      allRoutePreviewLines.forEach(line => map.removeLayer(line));
+      allRoutePreviewLines = [];
+    }
+
+    // Event listener for the "Reset Map" button
+    document.getElementById('resetMap').addEventListener('click', () => {
+        // Remove start marker from map if it exists
+        if (startMarker) {
+            map.removeLayer(startMarker);
+            startMarker = null;
+        }
+        // Remove end marker from map if it exists
+        if (endMarker) {
+            map.removeLayer(endMarker);
+            endMarker = null;
+        }
+        drawnItems.clearLayers(); // Clear all drawn circles (forbidden areas)
+        clearRouteLines(); // Clear all route lines
+        document.getElementById('results').innerHTML = ''; // Clear results display
+        showMessage('Map reset. Click to set a new start point.', 'info');
+    });
+
+    /**
+     * Fetches routes between two points using the OSRM API.
+     * OSRM (Open Source Routing Machine) provides routing services.
+     * @param {L.LatLng} start - The starting LatLng object.
+     * @param {L.LatLng} end - The ending LatLng object.
+     * @returns {Promise<Array<Object>>} - An array of route objects, each with 'path' (Leaflet coordinates) and 'distance' (in km).
+     */
+    async function getRoutes(start, end) {
+      const coords = `${start.lng},${start.lat};${end.lng},${end.lat}`;
+      // Request alternatives=true to get multiple route options
+      const response = await fetch(`https://router.project-osrm.org/route/v1/foot/${coords}?alternatives=true&overview=full&geometries=geojson`);
+      if (!response.ok) {
+        // Throw an error if the API call fails
+        throw new Error(`OSRM API error: ${response.statusText} (Status: ${response.status})`);
+      }
+      const data = await response.json();
+      if (!data.routes || data.routes.length === 0) {
+        return []; // Return empty array if no routes are found
+      }
+      // Map OSRM response to a more usable format for Leaflet
+      return data.routes.map(route => ({
+        // Convert OSRM [lon, lat] coordinates to Leaflet [lat, lon]
+        path: route.geometry.coordinates.map(p => [p[1], p[0]]),
+        distance: route.distance / 1000 // Convert meters to kilometers
+      }));
+    }
+
+    /**
+     * Fetches elevation data for a given path using Open-Elevation API.
+     * @param {Array<Array<number>>} path - An array of [lat, lon] coordinate pairs representing the route.
+     * @returns {Promise<Array<number>>} - An array of elevation values in meters for each point in the path.
+     */
+    async function getElevation(path) {
+      // Open-Elevation API has a limit of ~2000 locations per request.
+      // For very long paths, you might need to chunk the requests.
+      // For typical walk lengths, sending all points should be fine.
+      const locations = path.map(([lat, lon]) => ({ latitude: lat, longitude: lon }));
+      if (locations.length === 0) return []; // Return empty if no locations
+
+      try {
+        const response = await fetch('https://api.open-elevation.com/api/v1/lookup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locations })
+        });
+        if (!response.ok) {
+          // Throw an error if the API call fails
+          throw new Error(`Open-Elevation API error: ${response.statusText} (Status: ${response.status})`);
+        }
+        const data = await response.json();
+        return data.results.map(p => p.elevation);
+      } catch (error) {
+        console.error("Error fetching elevation:", error);
+        showMessage('Could not fetch elevation data. This feature might be unavailable temporarily.', 'error');
+        return [];
+      }
+    }
+
+    /**
+     * Calculates the total elevation gain (uphill climbing) from an array of elevation points.
+     * @param {Array<number>} elevationData - An array of elevation values in meters.
+     * @returns {number} - The total elevation gain in meters.
+     */
+    function calculateElevationGain(elevationData) {
+      if (elevationData.length < 2) return 0; // Need at least two points to calculate gain
+      let gain = 0;
+      for (let i = 1; i < elevationData.length; i++) {
+        const diff = elevationData[i] - elevationData[i - 1];
+        if (diff > 0) { // Only count positive differences (uphill)
+          gain += diff;
+        }
+      }
+      return gain;
+    }
+
+    /**
+     * Checks if a given route intersects with any of the drawn forbidden circles.
+     * @param {Object} route - The route object with a 'path' property (array of [lat, lon] pairs).
+     * @returns {boolean} - True if the route intersects any forbidden area, false otherwise.
+     */
+    function intersectsForbiddenArea(route) {
+        // Iterate over all layers currently drawn on the map (expected to be circles for forbidden areas)
+        for (const forbiddenCircle of drawnItems.getLayers()) {
+            if (forbiddenCircle instanceof L.Circle) { // Ensure the layer is indeed a Leaflet Circle
+                const center = forbiddenCircle.getLatLng(); // Get the center coordinates of the circle
+                const radius = forbiddenCircle.getRadius(); // Get the radius of the circle
+
+                // Check each point in the route's path
+                for (const [lat, lon] of route.path) {
+                    const point = L.latLng(lat, lon); // Convert path point to Leaflet LatLng object
+                    // If the distance from a route point to the circle's center is less than its radius,
+                    // it means the route passes through the forbidden area.
+                    if (center.distanceTo(point) < radius) {
+                        return true; // Route intersects a forbidden area
+                    }
+                }
+            }
+        }
+        return false; // No intersection found with any forbidden area
+    }
+
+    /**
+     * Generates dummy area breakdown percentages (urban, suburban, woodland, fields).
+     * This is a placeholder as real area type detection requires specialized GIS data or APIs.
+     * The percentages are illustrative and vary based on the calculated elevation gain.
+     * @param {number} elevationGain - The calculated elevation gain for the route in meters.
+     * @returns {Object} - An object with area type percentages (e.g., { urban: "30%", woodland: "40%" }).
+     */
+    function getDummyAreaBreakdown(elevationGain) {
+        let urban = 0;
+        let suburban = 0;
+        let woodland = 0;
+        let fields = 0;
+
+        // Simple heuristic: more hilly -> more woodland/fields, less urban/suburban
+        if (elevationGain < 10) { // Relatively flat routes
+            urban = Math.floor(Math.random() * 20) + 40; // 40-60% urban
+            suburban = Math.floor(Math.random() * 15) + 20; // 20-35% suburban
+            woodland = Math.floor(Math.random() * 10) + 5; // 5-15% woodland
+        } else if (elevationGain < 50) { // Moderately hilly routes
+            urban = Math.floor(Math.random() * 15) + 20; // 20-35% urban
+            suburban = Math.floor(Math.random() * 10) + 20; // 20-30% suburban
+            woodland = Math.floor(Math.random() * 20) + 30; // 30-50% woodland
+        } else { // Very hilly routes
+            urban = Math.floor(Math.random() * 10) + 5; // 5-15% urban
+            suburban = Math.floor(Math.random() * 10) + 10; // 10-20% suburban
+            woodland = Math.floor(Math.random() * 20) + 40; // 40-60% woodland
+        }
+
+        // Calculate fields as the remainder to sum to 100%
+        fields = 100 - urban - suburban - woodland;
+        // Ensure no negative values and adjust if sum exceeds 100 due to random
+        if (fields < 0) fields = 0;
+
+        // Re-normalize to ensure percentages sum up to exactly 100% after random generation
+        const total = urban + suburban + woodland + fields;
+        urban = Math.round(urban / total * 100);
+        suburban = Math.round(suburban / total * 100);
+        woodland = Math.round(woodland / total * 100);
+        fields = 100 - urban - suburban - woodland; // Final adjustment
+
+        return {
+            urban: `${urban}%`,
+            suburban: `${suburban}%`,
+            woodland: `${woodland}%`,
+            fields: `${fields}%`
+        };
+    }
+
+
+    // Event listener for the "Plan Route" button
+    document.getElementById('startRoute').addEventListener('click', async () => {
+      clearMessages(); // Clear any previous messages
+      if (!startMarker) {
+        showMessage('Please set your starting point by clicking on the map.', 'error');
+        return;
+      }
+
+      clearRouteLines(); // Clear any previously displayed routes
+
+      const minDist = parseFloat(document.getElementById('minDistance').value);
+      const maxDist = parseFloat(document.getElementById('maxDistance').value);
+      const startLatLng = startMarker.getLatLng();
+      // Determine end point: if no end marker, assume circular route back to startLatLng
+      const endLatLng = endMarker ? endMarker.getLatLng() : startLatLng;
+
+      // Display loading message while routes are being planned
+      showMessage('Planning routes...', 'info');
+
+      try {
+        const routes = await getRoutes(startLatLng, endLatLng);
+        if (routes.length === 0) {
+            showMessage('No routes found between the selected points. Try adjusting distance or points.', 'error');
+            document.getElementById('results').innerHTML = '';
+            return;
+        }
+
+        // Filter routes based on distance criteria and whether they intersect forbidden areas
+        const filteredRoutes = routes.filter(r =>
+            r.distance >= minDist &&
+            r.distance <= maxDist &&
+            !intersectsForbiddenArea(r) // Filter out routes that pass through forbidden areas
+        );
+
+        if (filteredRoutes.length === 0) {
+            showMessage('No routes found matching your criteria (distance or avoiding areas). Try adjusting filters or clearing forbidden areas.', 'error');
+            document.getElementById('results').innerHTML = '';
+            return;
+        }
+
+        const resultsContainer = document.getElementById('results');
+        resultsContainer.innerHTML = '<h3 class="text-xl font-semibold text-gray-800 mb-2">Choose a route:</h3><ul id="routeList" class="list-disc pl-5">';
+        const list = document.getElementById('routeList');
+
+        // Process and display each filtered route option
+        for (let i = 0; i < filteredRoutes.length; i++) {
+          const route = filteredRoutes[i];
+          const listItem = document.createElement('li');
+          listItem.classList.add('mb-2');
+
+          // Add a faint preview line for each route option
+          const previewLine = L.polyline(route.path, { color: 'gray', opacity: 0.5, weight: 3 }).addTo(map);
+          allRoutePreviewLines.push(previewLine); // Store for later clearing/resetting
+
+          // Fetch elevation data for the current route
+          const elevationData = await getElevation(route.path);
+          const elevationGain = calculateElevationGain(elevationData);
+
+          // Get dummy area breakdown for the current route
+          const areaTypes = getDummyAreaBreakdown(elevationGain);
+
+          // Populate the list item with route details and a clickable option
+          listItem.innerHTML = `
+            <span class="route-option" data-route-index="${i}">Route ${i + 1} (${route.distance.toFixed(1)} km)</span>
+            <div id="details-route-${i}" class="hidden mt-1 p-2 bg-gray-50 rounded-md">
+                <p class="text-sm">Elevation gain: <span class="font-semibold">${elevationGain.toFixed(1)} m</span></p>
+                <p class="text-sm">Area Breakdown (Illustrative):</p>
+                <ul class="list-disc list-inside text-xs">
+                    ${Object.entries(areaTypes).map(([k, v]) => `<li>${k}: ${v}</li>`).join('')}
+                </ul>
+                <p class="text-xs text-gray-500 mt-1">Note: Area breakdown is illustrative and not based on real-time land-use data.</p>
+            </div>
+          `;
+
+          // Add click listener to each route option to highlight it and show details
+          listItem.querySelector('.route-option').addEventListener('click', () => {
+            // Clear any previously highlighted route
+            if (currentRoutePolyline) {
+                map.removeLayer(currentRoutePolyline);
+            }
+            // Reset all preview lines to their default faint opacity
+            allRoutePreviewLines.forEach(line => line.setStyle({ color: 'gray', opacity: 0.5, weight: 3 }));
+            // Hide all detail boxes
+            document.querySelectorAll('[id^="details-route-"]').forEach(el => el.classList.add('hidden'));
+
+            // Highlight the selected route with a distinct color and weight
+            currentRoutePolyline = L.polyline(route.path, { color: '#2563eb', weight: 5 }).addTo(map);
+            map.fitBounds(currentRoutePolyline.getBounds()); // Zoom map to fit the highlighted route
+            previewLine.setStyle({ opacity: 0 }); // Hide the faint preview line for the selected route
+
+            // Show the detailed information for the selected route
+            document.getElementById(`details-route-${i}`).classList.remove('hidden');
+            showMessage(`Route ${i + 1} selected. Details below.`, 'info');
+          });
+          list.appendChild(listItem); // Add the route option to the list
+        }
+        clearMessages(); // Clear the "Planning routes..." message
+        showMessage(`Found ${filteredRoutes.length} routes. Select one to view details.`, 'info');
+
+      } catch (error) {
+        console.error("Error planning route:", error);
+        showMessage(`An error occurred while planning routes: ${error.message}. Please try again.`, 'error');
+        document.getElementById('results').innerHTML = '';
+      }
+    });
+
+    // Attempt to get the user's current location and center the map
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                map.setView([lat, lon], 13); // Set map view to user's location
+                showMessage('Map centered on your current location. Click to set start point.', 'info');
+            },
+            (error) => {
+                console.warn('Geolocation failed:', error);
+                showMessage('Could not get your current location. Defaulting map view to London. Click to set start point.', 'info');
+            },
+            { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 } // Geolocation options
+        );
+    } else {
+        // Fallback if geolocation is not supported by the browser
+        showMessage('Geolocation is not supported by your browser. Defaulting map view to London. Click to set start point.', 'info');
+    }
+
+  </script>
+</body>
+</html>
